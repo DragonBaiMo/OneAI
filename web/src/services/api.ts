@@ -3,9 +3,17 @@ import type { ApiResponse } from '@/types/api'
 /**
  * API 配置
  */
-const API_CONFIG = {
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api',
+export const API_CONFIG = {
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 30000,
+}
+
+/**
+ * 获取 API 主机地址（用于 OAuth redirect_uri）
+ */
+export function getApiHost(): string {
+  // 移除末尾的 /api 获取主机地址
+  return API_CONFIG.baseURL.replace(/\/api\/?$/, '')
 }
 
 /**

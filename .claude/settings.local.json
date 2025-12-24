@@ -9,7 +9,10 @@
       "Bash(python split_emojis.py:*)",
       "Bash(dir:*)",
       "Bash(pip install:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(bun:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(npx shadcn@latest add:*)"
     ]
   }
 }

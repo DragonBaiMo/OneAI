@@ -1,0 +1,433 @@
+﻿using Microsoft.EntityFrameworkCore;
+using OneAI.Data;
+using OneAI.Entities;
+using OneAI.Models;
+using OneAI.Services.AI;
+
+namespace OneAI.Services;
+
+public class AIAccountService
+{
+    private readonly AppDbContext _appDbContext;
+    private readonly AccountQuotaCacheService _quotaCache;
+    private readonly ILogger<AIAccountService> _logger;
+
+    public AIAccountService(
+        AppDbContext appDbContext,
+        AccountQuotaCacheService quotaCache,
+        ILogger<AIAccountService> logger)
+    {
+        _appDbContext = appDbContext;
+        _quotaCache = quotaCache;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// 智能获取最优 AI 账户
+    /// 根据配额使用情况、账户健康度等因素智能选择最佳账户
+    /// </summary>
+    /// <param name="model">请求的模型名称</param>
+    /// <returns>最优账户，如果没有可用账户则返回null</returns>
+    public async Task<AIAccount?> GetAIAccount(string model)
+    {
+        // 1. 尝试从缓存获取账户列表，如果缓存不存在则从数据库查询
+        var allAccounts = _quotaCache.GetAccountsCache();
+        if (allAccounts == null)
+        {
+            _logger.LogDebug("账户列表缓存未命中，从数据库加载");
+            allAccounts = await _appDbContext.AIAccounts.ToListAsync();
+            _quotaCache.SetAccountsCache(allAccounts);
+        }
+        else
+        {
+            _logger.LogDebug("账户列表缓存命中，共 {Count} 个账户", allAccounts.Count);
+        }
+
+        // 2. 筛选可用账户（已启用 + 不在使用中 + 未限流或限流已过期）
+        var availableAccounts = allAccounts
+            .Where(x => x.IsEnabled &&
+                       !AIProviderAsyncLocal.AIProviderIds.Contains(x.Id) &&
+                       x.IsAvailable())
+            .ToList();
+
+        if (!availableAccounts.Any())
+        {
+            _logger.LogWarning("没有找到可用的 AI 账户 (模型: {Model})", model);
+            return null;
+        }
+
+        // 3. 获取所有账户的配额信息
+        var accountIds = availableAccounts.Select(a => a.Id).ToList();
+        var quotaInfos = _quotaCache.GetAllQuotas(accountIds);
+
+        _logger.LogDebug(
+            "正在为模型 {Model} 选择账户，可用账户数: {Count}, 配额信息: {QuotaStats}",
+            model,
+            availableAccounts.Count,
+            _quotaCache.GetQuotaStatistics(accountIds));
+
+        // 4. 根据配额信息进行智能排序
+        var rankedAccounts = availableAccounts
+            .Select(account => new
+            {
+                Account = account,
+                QuotaInfo = quotaInfos.GetValueOrDefault(account.Id),
+                // 计算综合评分
+                Score = CalculateAccountScore(account, quotaInfos.GetValueOrDefault(account.Id))
+            })
+            .OrderByDescending(x => x.Score) // 分数高的优先
+            .ThenBy(x => x.Account.UsageCount) // 使用次数少的优先
+            .ThenByDescending(x => x.Account.LastUsedAt ?? DateTime.MinValue) // 最近使用的最后考虑（避免单一账户过载）
+            .ToList();
+
+        // 5. 过滤掉配额耗尽的账户
+        var bestAccountData = rankedAccounts
+            .FirstOrDefault(x => x.QuotaInfo == null || !x.QuotaInfo.IsQuotaExhausted());
+
+        if (bestAccountData == null)
+        {
+            _logger.LogWarning("所有账户配额已耗尽 (模型: {Model})", model);
+            return null;
+        }
+
+        var bestAccountId = bestAccountData.Account.Id;
+
+        // 6. 使用原子更新来更新使用统计（避免并发问题）
+        var now = DateTime.UtcNow;
+        await _appDbContext.AIAccounts
+            .Where(x => x.Id == bestAccountId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(a => a.LastUsedAt, now)
+                .SetProperty(a => a.UsageCount, a => a.UsageCount + 1));
+
+        _logger.LogInformation(
+            "为模型 {Model} 选中账户 {AccountId} (名称: {Name}), 评分: {Score}, 配额状态: {Status}",
+            model,
+            bestAccountId,
+            bestAccountData.Account.Name ?? "未命名",
+            bestAccountData.Score,
+            bestAccountData.QuotaInfo?.GetStatusDescription() ?? "无配额信息");
+
+        // 返回选中的账户（需要重新查询以获取最新的统计信息）
+        return bestAccountData.Account;
+    }
+
+    /// <summary>
+    /// 尝试获取指定ID的账户（用于会话粘性）
+    /// 检查账户是否可用，如果可用则返回，否则返回null
+    /// </summary>
+    /// <param name="accountId">账户ID</param>
+    /// <returns>可用的账户，如果不可用则返回null</returns>
+    public async Task<AIAccount?> TryGetAccountById(int accountId)
+    {
+        // 1. 尝试从缓存获取账户列表
+        var allAccounts = _quotaCache.GetAccountsCache();
+        if (allAccounts == null)
+        {
+            _logger.LogDebug("账户列表缓存未命中，从数据库加载");
+            allAccounts = await _appDbContext.AIAccounts.ToListAsync();
+            _quotaCache.SetAccountsCache(allAccounts);
+        }
+
+        // 2. 查找指定ID的账户
+        var account = allAccounts.FirstOrDefault(x => x.Id == accountId);
+        if (account == null)
+        {
+            _logger.LogDebug("账户 {AccountId} 不存在", accountId);
+            return null;
+        }
+
+        // 3. 检查账户是否可用
+        var isAvailable = account.IsEnabled &&
+                         !AIProviderAsyncLocal.AIProviderIds.Contains(account.Id) &&
+                         account.IsAvailable();
+
+        if (!isAvailable)
+        {
+            _logger.LogDebug(
+                "账户 {AccountId} 不可用 (启用: {IsEnabled}, 使用中: {InUse}, 可用: {IsAvailable})",
+                accountId,
+                account.IsEnabled,
+                AIProviderAsyncLocal.AIProviderIds.Contains(account.Id),
+                account.IsAvailable());
+            return null;
+        }
+
+        // 4. 检查配额是否耗尽
+        var quotaInfo = _quotaCache.GetQuota(accountId);
+        if (quotaInfo != null && !quotaInfo.IsExpired() && quotaInfo.IsQuotaExhausted())
+        {
+            _logger.LogDebug("账户 {AccountId} 配额已耗尽", accountId);
+            return null;
+        }
+
+        // 5. 账户可用，更新使用统计
+        var now = DateTime.UtcNow;
+        await _appDbContext.AIAccounts
+            .Where(x => x.Id == accountId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(a => a.LastUsedAt, now)
+                .SetProperty(a => a.UsageCount, a => a.UsageCount + 1));
+
+        _logger.LogInformation(
+            "会话粘性：成功获取账户 {AccountId} (名称: {Name})",
+            accountId,
+            account.Name ?? "未命名");
+
+        return account;
+    }
+
+    /// <summary>
+    /// 计算账户综合评分
+    /// </summary>
+    /// <param name="account">账户实体</param>
+    /// <param name="quotaInfo">配额信息（可能为null）</param>
+    /// <returns>0-100的综合评分</returns>
+    private int CalculateAccountScore(AIAccount account, AccountQuotaInfo? quotaInfo)
+    {
+        var score = 0;
+
+        // 如果有配额信息，使用健康度分数（权重80%）
+        if (quotaInfo != null && !quotaInfo.IsExpired())
+        {
+            var healthScore = quotaInfo.GetHealthScore();
+            score = (int)(healthScore * 0.8);
+
+            // 如果配额耗尽，直接返回0分
+            if (quotaInfo.IsQuotaExhausted())
+            {
+                return 0;
+            }
+        }
+        else
+        {
+            // 没有配额信息时，给予中等分数（权重80%）
+            // 这意味着未使用过的账户会获得中等优先级
+            score = 40; // 50 * 0.8
+        }
+
+        // 考虑使用次数（使用次数越少，分数越高，权重10%）
+        var usageScore = Math.Max(0, 100 - account.UsageCount / 10);
+        score += (int)(usageScore * 0.1);
+
+        // 考虑最后使用时间（越久未使用，分数越高，权重10%）
+        if (account.LastUsedAt.HasValue)
+        {
+            var minutesSinceLastUse = (DateTime.UtcNow - account.LastUsedAt.Value).TotalMinutes;
+            // 最多给予10分（100分钟以上未使用）
+            var timeScore = Math.Min(100, (int)minutesSinceLastUse);
+            score += (int)(timeScore * 0.1);
+        }
+        else
+        {
+            // 从未使用过的账户额外加分
+            score += 10;
+        }
+
+        return Math.Max(0, Math.Min(100, score));
+    }
+
+    /// <summary>
+    /// 标记账户为限流状态（使用原子更新）
+    /// </summary>
+    /// <param name="accountId">账户ID</param>
+    /// <param name="resetAfterSeconds">配额重置剩余秒数</param>
+    public async Task MarkAccountAsRateLimited(int accountId, int resetAfterSeconds)
+    {
+        var resetTime = DateTime.UtcNow.AddSeconds(resetAfterSeconds);
+        var updateTime = DateTime.UtcNow;
+
+        var affectedRows = await _appDbContext.AIAccounts
+            .Where(x => x.Id == accountId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(a => a.IsRateLimited, true)
+                .SetProperty(a => a.RateLimitResetTime, resetTime)
+                .SetProperty(a => a.UpdatedAt, updateTime));
+
+        if (affectedRows == 0)
+        {
+            _logger.LogWarning("尝试标记不存在的账户 {AccountId} 为限流状态", accountId);
+            return;
+        }
+
+        // 清除账户列表缓存（因为限流状态发生了变化）
+        _quotaCache.ClearAccountsCache();
+
+        _logger.LogWarning(
+            "账户 {AccountId} 已标记为限流状态，将在 {ResetTime} 重置",
+            accountId,
+            resetTime);
+    }
+
+    /// <summary>
+    /// 禁用账户（用于401等认证失败的情况，使用原子更新）
+    /// </summary>
+    /// <param name="accountId">账户ID</param>
+    public async Task DisableAccount(int accountId)
+    {
+        var updateTime = DateTime.UtcNow;
+
+        var affectedRows = await _appDbContext.AIAccounts
+            .Where(x => x.Id == accountId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(a => a.IsEnabled, false)
+                .SetProperty(a => a.UpdatedAt, updateTime));
+
+        if (affectedRows == 0)
+        {
+            _logger.LogWarning("尝试禁用不存在的账户 {AccountId}", accountId);
+            return;
+        }
+
+        // 清除账户列表缓存（因为账户状态发生了变化）
+        _quotaCache.ClearAccountsCache();
+
+        _logger.LogWarning("账户 {AccountId} 已被禁用", accountId);
+    }
+
+    /// <summary>
+    /// 获取所有 AI 账户列表
+    /// </summary>
+    public async Task<List<AIAccountDto>> GetAllAccountsAsync()
+    {
+        var accounts = await _appDbContext.AIAccounts
+            .Select(a => new AIAccountDto
+            {
+                Id = a.Id,
+                Provider = a.Provider,
+                Name = a.Name,
+                Email = a.Email,
+                BaseUrl = a.BaseUrl,
+                IsEnabled = a.IsEnabled,
+                IsRateLimited = a.IsRateLimited,
+                RateLimitResetTime = a.RateLimitResetTime,
+                CreatedAt = a.CreatedAt,
+                UpdatedAt = a.UpdatedAt,
+                LastUsedAt = a.LastUsedAt,
+                UsageCount = a.UsageCount
+            })
+            .ToListAsync();
+
+        return accounts;
+    }
+
+    /// <summary>
+    /// 获取账户的配额状态（从缓存获取）
+    /// </summary>
+    /// <param name="accountId">账户ID</param>
+    /// <returns>配额状态，如果缓存不存在则返回无数据的状态</returns>
+    public AccountQuotaStatusDto GetAccountQuotaStatus(int accountId)
+    {
+        var quotaInfo = _quotaCache.GetQuota(accountId);
+
+        if (quotaInfo == null || quotaInfo.IsExpired())
+        {
+            return new AccountQuotaStatusDto
+            {
+                AccountId = accountId,
+                HasCacheData = false
+            };
+        }
+
+        return new AccountQuotaStatusDto
+        {
+            AccountId = accountId,
+            HasCacheData = true,
+            HealthScore = quotaInfo.GetHealthScore(),
+            PrimaryUsedPercent = quotaInfo.PrimaryUsedPercent,
+            SecondaryUsedPercent = quotaInfo.SecondaryUsedPercent,
+            PrimaryResetAfterSeconds = quotaInfo.PrimaryResetAfterSeconds,
+            SecondaryResetAfterSeconds = quotaInfo.SecondaryResetAfterSeconds,
+            StatusDescription = quotaInfo.GetStatusDescription(),
+            LastUpdatedAt = quotaInfo.LastUpdatedAt
+        };
+    }
+
+    /// <summary>
+    /// 批量获取账户的配额状态
+    /// </summary>
+    /// <param name="accountIds">账户ID列表</param>
+    /// <returns>账户配额状态字典</returns>
+    public Dictionary<int, AccountQuotaStatusDto> GetAccountQuotaStatuses(List<int> accountIds)
+    {
+        var result = new Dictionary<int, AccountQuotaStatusDto>();
+
+        foreach (var accountId in accountIds)
+        {
+            result[accountId] = GetAccountQuotaStatus(accountId);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 删除 AI 账户
+    /// </summary>
+    /// <param name="id">账户 ID</param>
+    /// <returns>是否删除成功</returns>
+    public async Task<bool> DeleteAccountAsync(int id)
+    {
+        var account = await _appDbContext.AIAccounts.FindAsync(id);
+        if (account == null)
+        {
+            return false;
+        }
+
+        // 清除配额缓存
+        _quotaCache.ClearQuota(id);
+
+        // 清除账户列表缓存（因为列表发生了变化）
+        _quotaCache.ClearAccountsCache();
+
+        _appDbContext.AIAccounts.Remove(account);
+        await _appDbContext.SaveChangesAsync();
+
+        _logger.LogInformation("账户 {AccountId} 已删除", id);
+
+        return true;
+    }
+
+    /// <summary>
+    /// 切换 AI 账户的启用/禁用状态
+    /// </summary>
+    /// <param name="id">账户 ID</param>
+    /// <returns>更新后的账户信息，如果账户不存在则返回 null</returns>
+    public async Task<AIAccountDto?> ToggleAccountStatusAsync(int id)
+    {
+        var account = await _appDbContext.AIAccounts.FindAsync(id);
+        if (account == null)
+        {
+            return null;
+        }
+
+        account.IsEnabled = !account.IsEnabled;
+        account.UpdatedAt = DateTime.UtcNow;
+
+        // FindAsync 返回的实体已被跟踪，直接调用 SaveChangesAsync 即可
+        await _appDbContext.SaveChangesAsync();
+
+        // 清除账户列表缓存（因为账户状态发生了变化）
+        _quotaCache.ClearAccountsCache();
+
+        _logger.LogInformation(
+            "账户 {AccountId} 状态已切换为 {Status}",
+            id,
+            account.IsEnabled ? "启用" : "禁用");
+
+        return new AIAccountDto
+        {
+            Id = account.Id,
+            Provider = account.Provider,
+            Name = account.Name,
+            Email = account.Email,
+            BaseUrl = account.BaseUrl,
+            IsEnabled = account.IsEnabled,
+            IsRateLimited = account.IsRateLimited,
+            RateLimitResetTime = account.RateLimitResetTime,
+            CreatedAt = account.CreatedAt,
+            UpdatedAt = account.UpdatedAt,
+            LastUsedAt = account.LastUsedAt,
+            UsageCount = account.UsageCount
+        };
+    }
+}

@@ -49,6 +49,30 @@ export const router = createBrowserRouter([
     ),
   },
   {
+    path: '/accounts',
+    element: (
+      <ProtectedRoute>
+        <Home />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/logs',
+    element: (
+      <ProtectedRoute>
+        <Home />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/settings',
+    element: (
+      <ProtectedRoute>
+        <Home />
+      </ProtectedRoute>
+    ),
+  },
+  {
     path: '*',
     element: <Navigate to="/" replace />,
   },

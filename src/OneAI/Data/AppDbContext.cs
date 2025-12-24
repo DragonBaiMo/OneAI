@@ -13,6 +13,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     /// </summary>
     public DbSet<AIAccount> AIAccounts { get; set; }
 
+    /// <summary>
+    /// 系统设置表
+    /// </summary>
+    public DbSet<SystemSettings> SystemSettings { get; set; }
+
+    /// <summary>
+    /// AI请求日志表
+    /// </summary>
+    public DbSet<AIRequestLog> AIRequestLogs { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -32,5 +42,19 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.HasIndex(e => e.IsEnabled);
             entity.HasIndex(e => e.IsRateLimited);
         });
+
+        // 配置 SystemSettings 实体
+        modelBuilder.Entity<SystemSettings>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Key).HasMaxLength(100).IsRequired();
+            entity.Property(e => e.Value).HasMaxLength(4000);
+            entity.Property(e => e.Description).HasMaxLength(500);
+            entity.Property(e => e.DataType).HasMaxLength(50).IsRequired();
+
+            // 创建唯一索引确保 Key 唯一性
+            entity.HasIndex(e => e.Key).IsUnique();
+        });
+
     }
 }

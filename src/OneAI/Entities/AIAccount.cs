@@ -1,3 +1,7 @@
+using System.Text.Json;
+using OneAI.Constants;
+using OneAI.Services.OpenAIOAuth;
+
 namespace OneAI.Entities;
 
 /// <summary>
@@ -25,6 +29,11 @@ public class AIAccount
     /// </summary>
     public string? Name { get; set; }
 
+    /// <summary>
+    /// 邮箱
+    /// </summary>
+    public string? Email { get; set; }
+    
     /// <summary>
     /// 基础 URL（可选，用于自定义 API 端点）
     /// </summary>
@@ -69,6 +78,22 @@ public class AIAccount
     /// 使用次数统计
     /// </summary>
     public int UsageCount { get; set; } = 0;
+
+    public void SetOpenAIOAuth(OpenAiOauth openAiOauth)
+    {
+        OAuthToken = JsonSerializer.Serialize(openAiOauth, JsonSerializerOptions.Web);
+    }
+
+    public OpenAiOauth? GetOpenAiOauth()
+    {
+        if (string.IsNullOrEmpty(OAuthToken) || Provider != AIProviders.OpenAI)
+        {
+            return null;
+        }
+
+
+        return JsonSerializer.Deserialize<OpenAiOauth>(OAuthToken, JsonSerializerOptions.Web);
+    }
 
     /// <summary>
     /// 判断是否使用 OAuth 认证方式

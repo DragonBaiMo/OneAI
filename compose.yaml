@@ -1,0 +1,7 @@
+﻿services:
+  oneai:
+    image: registry.cn-shenzhen.aliyuncs.com/token-ai/oneai
+    build:
+      context: .
+      dockerfile: src/OneAI/Dockerfile
+
