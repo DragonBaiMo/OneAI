@@ -1,6 +1,7 @@
 using System.Text.Json;
 using OneAI.Constants;
 using OneAI.Services.OpenAIOAuth;
+using OneAI.Services.GeminiOAuth;
 
 namespace OneAI.Entities;
 
@@ -93,6 +94,21 @@ public class AIAccount
 
 
         return JsonSerializer.Deserialize<OpenAiOauth>(OAuthToken, JsonSerializerOptions.Web);
+    }
+
+    public void SetGeminiOAuth(GeminiOAuthCredentialsDto geminiOauth)
+    {
+        OAuthToken = JsonSerializer.Serialize(geminiOauth, JsonSerializerOptions.Web);
+    }
+
+    public GeminiOAuthCredentialsDto? GetGeminiOauth()
+    {
+        if (string.IsNullOrEmpty(OAuthToken) || Provider != AIProviders.Gemini)
+        {
+            return null;
+        }
+
+        return JsonSerializer.Deserialize<GeminiOAuthCredentialsDto>(OAuthToken, JsonSerializerOptions.Web);
     }
 
     /// <summary>

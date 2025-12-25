@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text.Json;
 using System.Threading.Channels;
 using OneAI.Entities;
 using OneAI.Services.AI.Models.Responses.Input;
@@ -37,6 +36,32 @@ public class AIRequestLogService
         AIAccount? account,
         bool sessionStickinessUsed = false)
     {
+        return await CreateRequestLogInternal(context, request.Model, request.Stream ?? false, account, sessionStickinessUsed);
+    }
+
+    /// <summary>
+    /// 创建新的请求日志 - 通用版本（支持不同的请求类型）
+    /// </summary>
+    public async Task<(long TempLogId, Stopwatch Stopwatch)> CreateRequestLog(
+        HttpContext context,
+        string? model,
+        bool isStreaming,
+        AIAccount? account,
+        bool sessionStickinessUsed = false)
+    {
+        return await CreateRequestLogInternal(context, model, isStreaming, account, sessionStickinessUsed);
+    }
+
+    /// <summary>
+    /// 内部实现 - 创建请求日志
+    /// </summary>
+    private async Task<(long TempLogId, Stopwatch Stopwatch)> CreateRequestLogInternal(
+        HttpContext context,
+        string? model,
+        bool isStreaming,
+        AIAccount? account,
+        bool sessionStickinessUsed = false)
+    {
         var stopwatch = Stopwatch.StartNew();
         var now = DateTime.UtcNow;
 
@@ -56,22 +81,19 @@ public class AIRequestLogService
             ? orig.ToString()
             : "unknown";
 
-        // 序列化请求参数（排除大字段）
-        var requestParams = SerializeRequestParams(request);
-
         var log = new AIRequestLog
         {
             RequestId = Guid.NewGuid().ToString("N"),
             ConversationId = conversationId,
             SessionId = sessionId,
 
-            // 请求信息
+            // 请求信息 - 注意：不记录请求body中的任何参数信息
             AccountId = account?.Id,
             Provider = account?.Provider,
-            Model = request.Model,
-            Instructions = TruncateString(request.Instructions, 2000),
-            IsStreaming = request.Stream ?? false,
-            RequestParams = requestParams,
+            Model = model,
+            Instructions = null,
+            IsStreaming = isStreaming,
+            RequestParams = null,
             MessageSummary = string.Empty,
 
             // 初始状态
@@ -240,33 +262,6 @@ public class AIRequestLogService
         }
     }
 
-    /// <summary>
-    /// 序列化请求参数（排除大字段）
-    /// </summary>
-    private string? SerializeRequestParams(ResponsesInput request)
-    {
-        try
-        {
-            var paramsObj = new
-            {
-                model = request.Model,
-                stream = request.Stream,
-                temperature = request.Temperature,
-                top_p = request.TopP,
-                max_output_tokens = request.MaxOutputTokens,
-                store = request.Store,
-                service_tier = request.ServiceTier,
-                message_count = request.Inputs?.Count ?? 0,
-                tools_count = request.Tools?.Count ?? 0
-            };
-
-            return JsonSerializer.Serialize(paramsObj);
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
     /// <summary>
     /// 获取客户端真实IP

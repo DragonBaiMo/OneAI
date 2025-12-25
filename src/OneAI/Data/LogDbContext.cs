@@ -17,6 +17,21 @@ public class LogDbContext : DbContext
     /// </summary>
     public DbSet<AIRequestLog> AIRequestLogs { get; set; }
 
+    /// <summary>
+    /// AI请求每小时汇总统计 - 总体维度
+    /// </summary>
+    public DbSet<AIRequestHourlySummary> HourlySummaries { get; set; }
+
+    /// <summary>
+    /// AI请求每小时汇总统计 - 按模型维度
+    /// </summary>
+    public DbSet<AIRequestHourlyByModel> HourlyByModels { get; set; }
+
+    /// <summary>
+    /// AI请求每小时汇总统计 - 按账户维度
+    /// </summary>
+    public DbSet<AIRequestHourlyByAccount> HourlyByAccounts { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -58,6 +73,54 @@ public class LogDbContext : DbContext
             entity.HasIndex(e => e.RequestStartTime); // 按时间范围查询
             entity.HasIndex(e => new { e.AccountId, e.RequestStartTime }); // 组合索引：账户+时间
             entity.HasIndex(e => new { e.Model, e.RequestStartTime }); // 组合索引：模型+时间
+        });
+
+        // 配置 AIRequestHourlySummary 实体
+        modelBuilder.Entity<AIRequestHourlySummary>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+
+            // 唯一索引：防止同一小时重复聚合
+            entity.HasIndex(e => e.HourStartTime).IsUnique();
+
+            // 时间范围查询索引
+            entity.HasIndex(e => new { e.HourStartTime, e.TotalRequests });
+        });
+
+        // 配置 AIRequestHourlyByModel 实体
+        modelBuilder.Entity<AIRequestHourlyByModel>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+
+            // 唯一复合索引：同一小时+同一模型只有一条记录
+            entity.HasIndex(e => new { e.HourStartTime, e.Model }).IsUnique();
+
+            // 查询索引
+            entity.HasIndex(e => e.Model);
+            entity.HasIndex(e => e.Provider);
+            entity.HasIndex(e => new { e.HourStartTime, e.Provider });
+
+            // 字符串长度限制
+            entity.Property(e => e.Model).HasMaxLength(100).IsRequired();
+            entity.Property(e => e.Provider).HasMaxLength(50);
+        });
+
+        // 配置 AIRequestHourlyByAccount 实体
+        modelBuilder.Entity<AIRequestHourlyByAccount>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+
+            // 唯一复合索引：同一小时+同一账户只有一条记录
+            entity.HasIndex(e => new { e.HourStartTime, e.AccountId }).IsUnique();
+
+            // 查询索引
+            entity.HasIndex(e => e.AccountId);
+            entity.HasIndex(e => e.Provider);
+            entity.HasIndex(e => new { e.Provider, e.HourStartTime });
+
+            // 字符串长度限制
+            entity.Property(e => e.AccountName).HasMaxLength(100);
+            entity.Property(e => e.Provider).HasMaxLength(50);
         });
     }
 }

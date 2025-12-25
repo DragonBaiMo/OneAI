@@ -28,7 +28,7 @@ public class AIAccountService
     /// </summary>
     /// <param name="model">请求的模型名称</param>
     /// <returns>最优账户，如果没有可用账户则返回null</returns>
-    public async Task<AIAccount?> GetAIAccount(string model)
+    public async Task<AIAccount?> GetAIAccount(string model, string provider)
     {
         // 1. 尝试从缓存获取账户列表，如果缓存不存在则从数据库查询
         var allAccounts = _quotaCache.GetAccountsCache();
@@ -46,8 +46,10 @@ public class AIAccountService
         // 2. 筛选可用账户（已启用 + 不在使用中 + 未限流或限流已过期）
         var availableAccounts = allAccounts
             .Where(x => x.IsEnabled &&
-                       !AIProviderAsyncLocal.AIProviderIds.Contains(x.Id) &&
-                       x.IsAvailable())
+                        !AIProviderAsyncLocal.AIProviderIds.Contains(x.Id) &&
+                        x.Provider == provider
+                        &&
+                        x.IsAvailable())
             .ToList();
 
         if (!availableAccounts.Any())
@@ -113,6 +115,97 @@ public class AIAccountService
     }
 
     /// <summary>
+    /// 智能获取指定提供商的最优账户
+    /// 用于 Gemini API 等特定提供商的请求
+    /// </summary>
+    /// <param name="provider">AI 提供商（如 AIProviders.Gemini）</param>
+    /// <returns>最优账户，如果没有可用账户则返回null</returns>
+    public async Task<AIAccount?> GetAIAccountByProvider(string provider)
+    {
+        // 1. 尝试从缓存获取账户列表，如果缓存不存在则从数据库查询
+        var allAccounts = _quotaCache.GetAccountsCache();
+        if (allAccounts == null)
+        {
+            _logger.LogDebug("账户列表缓存未命中，从数据库加载");
+            allAccounts = await _appDbContext.AIAccounts.ToListAsync();
+            _quotaCache.SetAccountsCache(allAccounts);
+        }
+        else
+        {
+            _logger.LogDebug("账户列表缓存命中，共 {Count} 个账户", allAccounts.Count);
+        }
+
+        // 2. 筛选指定提供商的可用账户（已启用 + 提供商匹配 + 不在使用中 + 未限流或限流已过期）
+        var availableAccounts = allAccounts
+            .Where(x => x.IsEnabled &&
+                        x.Provider == provider &&
+                        !AIProviderAsyncLocal.AIProviderIds.Contains(x.Id) &&
+                        x.IsAvailable())
+            .ToList();
+
+        if (!availableAccounts.Any())
+        {
+            _logger.LogWarning("没有找到可用的 {Provider} 账户", provider);
+            return null;
+        }
+
+        // 3. 获取所有账户的配额信息
+        var accountIds = availableAccounts.Select(a => a.Id).ToList();
+        var quotaInfos = _quotaCache.GetAllQuotas(accountIds);
+
+        _logger.LogDebug(
+            "正在为提供商 {Provider} 选择账户，可用账户数: {Count}, 配额信息: {QuotaStats}",
+            provider,
+            availableAccounts.Count,
+            _quotaCache.GetQuotaStatistics(accountIds));
+
+        // 4. 根据配额信息进行智能排序
+        var rankedAccounts = availableAccounts
+            .Select(account => new
+            {
+                Account = account,
+                QuotaInfo = quotaInfos.GetValueOrDefault(account.Id),
+                // 计算综合评分
+                Score = CalculateAccountScore(account, quotaInfos.GetValueOrDefault(account.Id))
+            })
+            .OrderByDescending(x => x.Score) // 分数高的优先
+            .ThenBy(x => x.Account.UsageCount) // 使用次数少的优先
+            .ThenByDescending(x => x.Account.LastUsedAt ?? DateTime.MinValue) // 最近使用的最后考虑（避免单一账户过载）
+            .ToList();
+
+        // 5. 过滤掉配额耗尽的账户
+        var bestAccountData = rankedAccounts
+            .FirstOrDefault(x => x.QuotaInfo == null || !x.QuotaInfo.IsQuotaExhausted());
+
+        if (bestAccountData == null)
+        {
+            _logger.LogWarning("所有 {Provider} 账户配额已耗尽", provider);
+            return null;
+        }
+
+        var bestAccountId = bestAccountData.Account.Id;
+
+        // 6. 使用原子更新来更新使用统计（避免并发问题）
+        var now = DateTime.UtcNow;
+        await _appDbContext.AIAccounts
+            .Where(x => x.Id == bestAccountId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(a => a.LastUsedAt, now)
+                .SetProperty(a => a.UsageCount, a => a.UsageCount + 1));
+
+        _logger.LogInformation(
+            "为提供商 {Provider} 选中账户 {AccountId} (名称: {Name}), 评分: {Score}, 配额状态: {Status}",
+            provider,
+            bestAccountId,
+            bestAccountData.Account.Name ?? "未命名",
+            bestAccountData.Score,
+            bestAccountData.QuotaInfo?.GetStatusDescription() ?? "无配额信息");
+
+        // 返回选中的账户
+        return bestAccountData.Account;
+    }
+
+    /// <summary>
     /// 尝试获取指定ID的账户（用于会话粘性）
     /// 检查账户是否可用，如果可用则返回，否则返回null
     /// </summary>
@@ -139,8 +232,8 @@ public class AIAccountService
 
         // 3. 检查账户是否可用
         var isAvailable = account.IsEnabled &&
-                         !AIProviderAsyncLocal.AIProviderIds.Contains(account.Id) &&
-                         account.IsAvailable();
+                          !AIProviderAsyncLocal.AIProviderIds.Contains(account.Id) &&
+                          account.IsAvailable();
 
         if (!isAvailable)
         {

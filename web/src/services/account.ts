@@ -54,3 +54,24 @@ export const openaiOAuthService = {
     return post<AIAccountDto>('/openai/oauth/callback', request)
   },
 }
+
+/**
+ * Gemini OAuth 服务
+ */
+export const geminiOAuthService = {
+  /**
+   * 生成 Gemini OAuth 授权链接
+   */
+  generateOAuthUrl(proxy?: any): Promise<GenerateOAuthUrlResponse> {
+    return post<GenerateOAuthUrlResponse>('/gemini/oauth/authorize', {
+      proxy: proxy || null
+    })
+  },
+
+  /**
+   * 交换授权码获取 Token 并创建账户
+   */
+  exchangeOAuthCode(request: ExchangeOAuthCodeRequest): Promise<AIAccountDto> {
+    return post<AIAccountDto>('/gemini/oauth/callback', request)
+  },
+}

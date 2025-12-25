@@ -115,7 +115,7 @@ public class ResponsesService
                 // 如果会话粘性失败，使用智能选择
                 if (account == null)
                 {
-                    account = await aiAccountService.GetAIAccount(request.Model);
+                    account = await aiAccountService.GetAIAccount(request.Model, AIProviders.OpenAI);
                 }
 
                 if (account == null)
@@ -376,11 +376,11 @@ public class ResponsesService
                         try
                         {
                             await using var stream = await response.Content.ReadAsStreamAsync(context.RequestAborted);
-                            
+
                             context.Response.ContentType = "text/event-stream;charset=utf-8;";
                             context.Response.Headers.TryAdd("Cache-Control", "no-cache");
                             context.Response.Headers.TryAdd("Connection", "keep-alive");
-                            
+
                             await stream.CopyToAsync(context.Response.Body, context.RequestAborted);
                             await context.Response.Body.FlushAsync();
                         }
