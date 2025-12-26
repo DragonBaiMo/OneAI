@@ -11,6 +11,7 @@ using OneAI.Services;
 using OneAI.Services.AI;
 using OneAI.Services.Logging;
 using OneAI.Services.OpenAIOAuth;
+using OneAI.Services.GeminiOAuth;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -112,12 +113,16 @@ builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddSingleton<IOAuthSessionService, InMemoryOAuthSessionService>();
 builder.Services.AddScoped<OpenAIOAuthService>();
 builder.Services.AddScoped<OpenAiOAuthHelper>();
+builder.Services.AddScoped<GeminiOAuthService>();
+builder.Services.AddScoped<GeminiOAuthHelper>();
 builder.Services.AddSingleton<AccountQuotaCacheService>(); // 单例模式，缓存在应用生命周期内共享
 builder.Services.AddScoped<AIAccountService>();
 builder.Services.AddScoped<AIRequestLogService>(); // AI请求日志服务（生产者）
 builder.Services.AddHostedService<AIRequestLogWriterService>(); // 日志写入后台服务（消费者）
+builder.Services.AddHostedService<AIRequestAggregationBackgroundService>(); // 数据聚合后台服务
 builder.Services.AddHostedService<OAuthTokenRefreshBackgroundService>(); // OAuth Token 刷新后台服务
 builder.Services.AddScoped<ResponsesService>();
+builder.Services.AddScoped<GeminiAPIService>();
 builder.Services.AddScoped<ISettingsService, SettingsService>();
 
 // 配置 CORS
@@ -210,6 +215,12 @@ app.MapAIAccountEndpoints();
 
 // 映射 OpenAI OAuth 端点
 app.MapOpenAIOAuthEndpoints();
+
+// 映射 Gemini OAuth 端点
+app.MapGeminiOAuthEndpoints();
+
+// 映射 Gemini API 端点
+app.MapGeminiAPIEndpoints();
 
 // 映射系统设置端点
 app.MapSettingsEndpoints();

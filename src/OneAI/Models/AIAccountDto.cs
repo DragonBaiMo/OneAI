@@ -64,4 +64,9 @@ public class AIAccountDto
     /// 使用次数统计
     /// </summary>
     public int UsageCount { get; set; }
+
+    /// <summary>
+    /// Gemini 项目 ID（仅当提供商为 Gemini 时）
+    /// </summary>
+    public string? ProjectId { get; set; }
 }

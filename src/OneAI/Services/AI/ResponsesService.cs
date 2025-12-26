@@ -78,9 +78,7 @@ public class ResponsesService
 
                 // 尝试会话粘性：如果有 conversationId，优先使用上次的账户
                 AIAccount? account = null;
-                string? conversationId = context.Request.Headers.TryGetValue("conversation_id", out var convId)
-                    ? convId.ToString()
-                    : null;
+                string? conversationId = request.PromptCacheKey;
 
                 if (!string.IsNullOrEmpty(conversationId))
                 {
@@ -115,7 +113,7 @@ public class ResponsesService
                 // 如果会话粘性失败，使用智能选择
                 if (account == null)
                 {
-                    account = await aiAccountService.GetAIAccount(request.Model);
+                    account = await aiAccountService.GetAIAccount(request.Model, AIProviders.OpenAI);
                 }
 
                 if (account == null)
@@ -169,18 +167,17 @@ public class ResponsesService
                         address = account?.BaseUrl;
                     }
 
-                    // 判断当前请求是否包含了Codex的提示词
-                    if (string.IsNullOrEmpty(request.Instructions))
-                    {
-                        request.Instructions = AIPrompt.CodeXPrompt;
-                    }
-
-                    request.Store = false;
-                    request.ServiceTier = null;
-
-
                     if (request.Stream == true)
                     {
+                        // 判断当前请求是否包含了Codex的提示词
+                        if (string.IsNullOrEmpty(request.Instructions))
+                        {
+                            request.Instructions = AIPrompt.CodeXPrompt;
+                        }
+
+                        request.Store = false;
+                        request.ServiceTier = null;
+
                         HttpResponseMessage response;
                         try
                         {
@@ -626,10 +623,6 @@ public class ResponsesService
                         {
                             await using var stream = await response.Content.ReadAsStreamAsync(context.RequestAborted);
 
-                            context.Response.ContentType = "text/event-stream;charset=utf-8;";
-                            context.Response.Headers.TryAdd("Cache-Control", "no-cache");
-                            context.Response.Headers.TryAdd("Connection", "keep-alive");
-
                             await stream.CopyToAsync(context.Response.Body, context.RequestAborted);
                             await context.Response.Body.FlushAsync();
                         }
@@ -645,11 +638,6 @@ public class ResponsesService
                             _logger.LogError(streamEx,
                                 "流式传输过程中发生异常 (账户: {AccountId})，客户端可能已断开连接",
                                 account.Id);
-
-                            // 注意：此时日志已经记录为"成功"，因为响应头已发送
-                            // 流式传输中断通常是客户端断开，不需要更新日志状态
-                            // 如果需要记录传输失败，可以在这里添加额外的日志
-                            return;
                         }
 
                         // 成功返回

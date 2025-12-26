@@ -38,6 +38,7 @@ export interface GenerateOAuthUrlResponse {
 export interface ExchangeOAuthCodeRequest {
   sessionId: string
   authorizationCode: string
+  projectId?: string // 可选的 GCP 项目 ID（仅用于 Gemini），如果不提供则自动检测
   proxy?: {
     host?: string
     port?: number

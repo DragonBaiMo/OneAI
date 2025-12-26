@@ -12,7 +12,16 @@
       "Bash(ls:*)",
       "Bash(bun:*)",
       "mcp__ide__getDiagnostics",
-      "Bash(npx shadcn@latest add:*)"
+      "Bash(npx shadcn@latest add:*)",
+      "Bash(tree:*)",
+      "Bash(dotnet ef migrations add:*)",
+      "Bash(dotnet ef database update:*)",
+      "Bash(timeout 30 dotnet run:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd //c \"taskkill /F /IM OneAI.exe\")",
+      "Bash(dotnet clean:*)"
     ]
   }
 }
