@@ -119,7 +119,13 @@ public class ResponsesInput : IOpenAiModels.IModel, IOpenAiModels.IUser
 
     [JsonPropertyName("prompt_cache_key")] public string? PromptCacheKey { get; set; }
 
+    [JsonPropertyName("prompt_cache_retention")]
+    public string? PromptCacheRetention { get; set; }
+
     [JsonPropertyName("include")] public string[]? Include { get; set; }
+    
+    [JsonPropertyName("conversation")]
+    public object? Conversation { get; set; }
 }
 
 public sealed class ReasoningResponsesInput
