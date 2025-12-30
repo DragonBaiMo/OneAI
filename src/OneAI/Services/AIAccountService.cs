@@ -852,7 +852,7 @@ public class AIAccountService
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
             httpClient.Timeout = TimeSpan.FromSeconds(30);
 
-            var requestContent = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+            using var requestContent = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
             var response = await httpClient.PostAsync(apiUrl, requestContent);
 
             if (!response.IsSuccessStatusCode)
