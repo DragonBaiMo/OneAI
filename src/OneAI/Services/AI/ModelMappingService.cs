@@ -18,8 +18,8 @@ public sealed class ModelMappingService(ISettingsService settingsService, ILogge
 {
     private readonly ISettingsService _settingsService = settingsService;
     private readonly ILogger<ModelMappingService> _logger = logger;
-    private string? _cachedRaw;
-    private ModelMappingConfig _cachedConfig = new();
+    private static string? _cachedRaw;
+    private static ModelMappingConfig _cachedConfig = new();
 
     public async Task<ModelMappingResult?> ResolveAnthropicAsync(string model)
     {
