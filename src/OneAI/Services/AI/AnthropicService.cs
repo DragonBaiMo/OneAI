@@ -746,7 +746,7 @@ public class AnthropicService(
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         });
 
-        var request = new HttpRequestMessage(HttpMethod.Post, url)        
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)        
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
